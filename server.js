@@ -93,7 +93,7 @@ app.post('/api/equipment/createfile', async (req, res) => {
 app.get('/api/equipment/fromRepair', async (req, res) => {
     try{
         const result = await client.query(
-            `SELECT * FROM equipment LEFT JOIN tula_oit ON equipment.sender_id = tula_oit.id WHERE equipment.status = 'В ремонте'`
+            `SELECT e.*, s.fio AS sender_fio, r.fio AS reciver_fio FROM equipment e LEFT JOIN tula_oit s ON e.sender_id = s.id LEFT JOIN tula_oit r ON e.reciver_id = r.id WHERE e.status = 'В ремонте'`
         );
         res.status(200).json(result.rows);
     } catch (err){
@@ -105,7 +105,7 @@ app.get('/api/equipment/fromRepair', async (req, res) => {
 app.get('/api/equipment/show', async (req, res) => {
     try{
         const result = await client.query(
-            `SELECT e.*, s.fio AS sender_fio, r.fio AS reciver_fio FROM equipment e LEFT JOIN tula_oit s ON e.sender_id = s.id LEFT JOIN tula_oit r ON e.reciver_id = r.id`
+            `SELECT e.*, s.fio AS sender_fio, r.fio AS reciver_fio FROM equipment e LEFT JOIN tula_oit s ON e.sender_id = s.id LEFT JOIN tula_oit r ON e.reciver_id = r.id WHERE e.status = 'В ремонте'`
         );
         res.status(200).json(result.rows);
     } catch (err){
