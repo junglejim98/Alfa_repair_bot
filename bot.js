@@ -17,6 +17,10 @@ let selectedSenderId = null;
 let selectedReciverId = null;
 let currentSn = null;
 
+function cleanSN(str) {
+    return !/[ `!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~]/.test(str);
+  }
+
 // Функции для получения данных
 
     const keyboard = {
@@ -248,6 +252,11 @@ bot.on('message', async (msg) => {
         });
     } else if (selectedSenderId !== null) {
         const sn = text.trim();
+        
+        if (!sn || sn.length < 3 || !cleanSN(sn)) {
+            return bot.sendMessage(chatId, '❌ Ошибка: SN не может быть пустым, содержать пробелы и спецсимволы или слишком коротким!');
+        }
+
         const send_date = new Date().toLocaleDateString();
 
         try {
