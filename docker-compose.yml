@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      - db
+    volumes:
+      - .:/app
+      - /app/node_modules
+  db:
+    image: postgres:14.17-alpine
+    restart: always
+    env_file: .env
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Admin-pc
+      POSTGRES_DB: repair
+    volumes:
+      - ./backup.dump:/docker-entrypoint-initdb.d/backup.dump
+      - ./restore.sh:/docker-entrypoint-initdb.d/restore.sh
+    ports:
+    - "5432:5432"
+volumes:
+  postgres_data:
