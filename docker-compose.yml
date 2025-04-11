@@ -20,6 +20,5 @@ services:
       POSTGRES_DB: ${DB_NAME}
     volumes:
       - ./backup.dump:/docker-entrypoint-initdb.d/backup.dump
-      - ./restore.sh:/docker-entrypoint-initdb.d/restore.sh
     ports:
     - "5432:5432"
