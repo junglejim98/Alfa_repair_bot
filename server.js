@@ -31,13 +31,23 @@ app.get('/api/employees', async (req, res) => {
     }
 });
 
+app.get('/api/service_company', async (req, res) => {
+    try{
+        const result = await client.query('SELECT id, sc_name from service_company');
+        res.status(200).json(result.rows);
+    } catch (err){
+        console.error('Ошибка при получении списка сервисных компаний:', err);
+        res.status(500).json({error: 'Ошибка при получении списка сервисных компаний'});
+    }
+});
+
 app.post('/api/equipment', async (req, res) => {
-    const { sn, send_date, status, sender_id } = req.body;
+    const { sn, send_date, status, sender_id, sc_id } = req.body;
 
     try {
         const result = await client.query(
-            'INSERT INTO equipment (sn, send_date, status, sender_id) values($1, $2, $3, $4) RETURNING *',
-            [sn, send_date, status, sender_id]
+            'INSERT INTO equipment (sn, send_date, status, sender_id, sc_id) values($1, $2, $3, $4, $5) RETURNING *',
+            [sn, send_date, status, sender_id, sc_id]
         );
         res.status(201).json(result.rows[0]);
     } catch (err){
@@ -105,7 +115,11 @@ app.get('/api/equipment/fromRepair', async (req, res) => {
 app.get('/api/equipment/show', async (req, res) => {
     try{
         const result = await client.query(
-            `SELECT e.*, s.fio AS sender_fio, r.fio AS reciver_fio FROM equipment e LEFT JOIN tula_oit s ON e.sender_id = s.id LEFT JOIN tula_oit r ON e.reciver_id = r.id WHERE e.status = 'В ремонте'`
+            `SELECT e.*, s.fio AS sender_fio, r.fio AS reciver_fio, sc.sc_name AS service_company FROM equipment e 
+            LEFT JOIN tula_oit s ON e.sender_id = s.id 
+            LEFT JOIN tula_oit r ON e.reciver_id = r.id 
+            LEFT JOIN service_company sc  on e.sc_id=sc.id 
+            WHERE e.status = 'В ремонте'`
         );
         res.status(200).json(result.rows);
     } catch (err){

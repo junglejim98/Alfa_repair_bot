@@ -14,6 +14,7 @@ if (!PASSWORD) {
 
 const authorizedUsers = new Set();
 let selectedSenderId = null;
+let serviceCompanyID = null;
 let selectedReciverId = null;
 let currentSn = null;
 
@@ -40,6 +41,16 @@ const getEmployees = async () => {
         return response.data;
     } catch (err) {
         console.error('Ошибка при получении списка сотрудников:', err);
+        return [];
+    }
+};
+
+const getSCName = async() => {
+    try {
+        const response = await axios.get('http://localhost:6000/api/service_company');
+        return response.data;
+    } catch (err) {
+        console.error('Ошибка при получении списка сервисных компаний:', err);
         return [];
     }
 };
@@ -87,6 +98,7 @@ const sendEquipmentList = async (chatId, equipment, isFromRepair = false) => {
 *Отправитель:* \`${item.sender_fio || 'Не указан'}\`
 *Дата приема из ремонта:* \`${item.recive_date || 'Не указан'}\`
 *Принимающий:* \`${item.reciver_fio || 'Не указан'}\`
+*Сервисная компания:* \`${item.service_company || 'Не указан'}\`
 *Статус:* \`${item.status}\`
         `;
 
@@ -125,16 +137,19 @@ bot.onText(/\/torepair/, async (msg) => {
     }
 
     const employees = await getEmployees();
+    
 
     if (employees.length === 0) {
         return bot.sendMessage(chatId, 'Список сотрудников пуст.');
     }
 
-    const keyboard = employees.map(employee => [{ text: employee.fio, callback_data: `sender_${employee.id}` }]);
+    const Employee_keyboard = employees.map(employee => [{ text: employee.fio, callback_data: `sender_${employee.id}` }]);
+
+
 
     bot.sendMessage(chatId, 'Выберите сотрудника, который отправляет оборудование в ремонт:', {
         reply_markup: {
-            inline_keyboard: keyboard,
+            inline_keyboard: Employee_keyboard,
         },
     });
 });
@@ -196,8 +211,19 @@ bot.on('callback_query', async (query) => {
 
     if (data.startsWith('sender_')) {
         selectedSenderId = data.split('_')[1];
+        const servise_companys = await getSCName();
+        const SC_keyboad = servise_companys.map(service_company => [{text: service_company.sc_name, callback_data: `sc_${service_company.id}` }]);
+        bot.sendMessage(chatId, 'Выберите сервисную компанию, в которую отправляется оборудование:', {
+            reply_markup: {
+                inline_keyboard: SC_keyboad,
+            },
+        });
+
+        
+    } else if(data.startsWith('sc_')){
+        serviceCompanyID = data.split('_')[1];
         bot.sendMessage(chatId, 'Введите серийный номер оборудования:');
-    } else if (data.startsWith('receiver_')) {
+    }else if (data.startsWith('receiver_')) {
         const [employeeId, sn] = data.split('_').slice(1);
         selectedReciverId = employeeId;
         currentSn = sn;
@@ -265,6 +291,7 @@ bot.on('message', async (msg) => {
                 send_date,
                 status: 'В ремонте',
                 sender_id: selectedSenderId,
+                sc_id: serviceCompanyID,
             });
 
             selectedSenderId = null;
