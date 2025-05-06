@@ -41,13 +41,23 @@ app.get('/api/service_company', async (req, res) => {
     }
 });
 
+app.get('/api/equipment_type', async (req, res) => {
+    try{
+        const result = await client.query('SELECT id, equipment_name FROM equipment_type');
+        res.status(200).json(result.rows);
+    } catch (err) {
+        console.error('Ошибка при получении списка типов устройста:', err);
+        res.status(500).json({error: 'Ошибка получения списка типов устройств'});
+    }
+})
+
 app.post('/api/equipment', async (req, res) => {
-    const { sn, send_date, status, sender_id, sc_id } = req.body;
+    const { sn, send_date, status, sender_id, sc_id, equipment_type_id } = req.body;
 
     try {
         const result = await client.query(
-            'INSERT INTO equipment (sn, send_date, status, sender_id, sc_id) values($1, $2, $3, $4, $5) RETURNING *',
-            [sn, send_date, status, sender_id, sc_id]
+            'INSERT INTO equipment (sn, send_date, status, sender_id, sc_id, equip_type_id) values($1, $2, $3, $4, $5, $6) RETURNING *',
+            [sn, send_date, status, sender_id, sc_id, equipment_type_id]
         );
         res.status(201).json(result.rows[0]);
     } catch (err){
@@ -60,29 +70,34 @@ app.post('/api/equipment/createfile', async (req, res) => {
     try{
         const result = await client.query(
             `
-            SELECT e.*, s.fio AS sender_fio, r.fio AS reciver_fio 
-            FROM equipment e 
+            SELECT e.*, s.fio AS sender_fio, r.fio AS reciver_fio, sc.sc_name AS service_company, eq.equipment_name as equipment_type FROM equipment e 
             LEFT JOIN tula_oit s ON e.sender_id = s.id 
-            LEFT JOIN tula_oit r ON e.reciver_id = r.id`
+            LEFT JOIN tula_oit r ON e.reciver_id = r.id 
+            LEFT JOIN service_company sc  on e.sc_id = sc.id 
+            LEFT JOIN equipment_type eq on e.equip_type_id = eq.id`
         );
         const csvWriter = createObjectCsvWriter({
             path: './equipment_list.csv',
             header: [
                 { id: 'sn', title: 'Серийный номер' },
+                { id: 'equipment_type', title: 'Тип оборудования'},
                 { id: 'send_date', title: 'Дата отправки' },
                 { id: 'sender_fio', title: 'Отправитель' },
                 { id: 'recive_date', title: 'Дата приемки' },
                 { id: 'reciver_fio', title: 'Принимающий' },
+                { id: 'service_company', title: 'Сервисная комания'},
                 { id: 'status', title: 'Статус' },
             ],
             encoding: 'utf8',
         })
         const records = result.rows.map(row => ({
             sn: row.sn,
+            equipment_type: row.equipment_type || 'Не указан',
             send_date: row.send_date,
             sender_fio: row.sender_fio || 'Не указан',
             recive_date: row.recive_date || 'Не указан',
             reciver_fio: row.reciver_fio || 'Не указан',
+            service_company: row.service_company || 'Не указан',
             status: row.status,
         }));
 
@@ -103,7 +118,12 @@ app.post('/api/equipment/createfile', async (req, res) => {
 app.get('/api/equipment/fromRepair', async (req, res) => {
     try{
         const result = await client.query(
-            `SELECT e.*, s.fio AS sender_fio, r.fio AS reciver_fio FROM equipment e LEFT JOIN tula_oit s ON e.sender_id = s.id LEFT JOIN tula_oit r ON e.reciver_id = r.id WHERE e.status = 'В ремонте'`
+            `SELECT e.*, s.fio AS sender_fio, r.fio AS reciver_fio, sc.sc_name AS service_company, eq.equipment_name as equipment_type FROM equipment e 
+            LEFT JOIN tula_oit s ON e.sender_id = s.id 
+            LEFT JOIN tula_oit r ON e.reciver_id = r.id 
+            LEFT JOIN service_company sc  on e.sc_id = sc.id 
+            LEFT JOIN equipment_type eq on e.equip_type_id = eq.id
+            WHERE e.status = 'В ремонте'`
         );
         res.status(200).json(result.rows);
     } catch (err){
@@ -115,10 +135,11 @@ app.get('/api/equipment/fromRepair', async (req, res) => {
 app.get('/api/equipment/show', async (req, res) => {
     try{
         const result = await client.query(
-            `SELECT e.*, s.fio AS sender_fio, r.fio AS reciver_fio, sc.sc_name AS service_company FROM equipment e 
+            `SELECT e.*, s.fio AS sender_fio, r.fio AS reciver_fio, sc.sc_name AS service_company, eq.equipment_name as equipment_type FROM equipment e 
             LEFT JOIN tula_oit s ON e.sender_id = s.id 
             LEFT JOIN tula_oit r ON e.reciver_id = r.id 
-            LEFT JOIN service_company sc  on e.sc_id=sc.id 
+            LEFT JOIN service_company sc  on e.sc_id = sc.id 
+            LEFT JOIN equipment_type eq on e.equip_type_id = eq.id
             WHERE e.status = 'В ремонте'`
         );
         res.status(200).json(result.rows);

@@ -15,6 +15,7 @@ if (!PASSWORD) {
 const authorizedUsers = new Set();
 let selectedSenderId = null;
 let serviceCompanyID = null;
+let equipmentTypeID = null;
 let selectedReciverId = null;
 let currentSn = null;
 
@@ -55,6 +56,16 @@ const getSCName = async() => {
     }
 };
 
+const getEquipmentTypeName = async () => {
+    try{
+        const response = await axios.get('http://localhost:6000/api/equipment_type');
+        return response.data;
+    } catch (err) {
+        console.error('Оштбка при получении списка типов устройств:', err);
+        return [];
+    }
+}
+
 const getEquipmentToRepair = async () => {
     try {
         const response = await axios.get('http://localhost:6000/api/equipment/fromRepair');
@@ -94,6 +105,7 @@ const sendEquipmentList = async (chatId, equipment, isFromRepair = false) => {
     for (const item of equipment) {
         const message = `
 *SN:* \`${item.sn}\`
+*Тип оборудования:* \`${item.equipment_type || 'Не указан'}\`
 *Дата отправки в ремонт:* \`${item.send_date}\`
 *Отправитель:* \`${item.sender_fio || 'Не указан'}\`
 *Дата приема из ремонта:* \`${item.recive_date || 'Не указан'}\`
@@ -222,8 +234,20 @@ bot.on('callback_query', async (query) => {
         
     } else if(data.startsWith('sc_')){
         serviceCompanyID = data.split('_')[1];
+        const equipment_types = await getEquipmentTypeName();
+        const equipment_types_keyboard = equipment_types.map(equipment_type => [{text: equipment_type.equipment_name, callback_data: `et_${equipment_type.id}` }]);
+        bot.sendMessage(chatId, 'Выберите тип оборудования, которое отправляется в сервисную компанию:', {
+            reply_markup: {
+                inline_keyboard: equipment_types_keyboard,
+            },
+        });
+
+        
+    } else if(data.startsWith('et_')){
+        equipmentTypeID = data.split('_')[1];
         bot.sendMessage(chatId, 'Введите серийный номер оборудования:');
-    }else if (data.startsWith('receiver_')) {
+    }
+        else if (data.startsWith('receiver_')) {
         const [employeeId, sn] = data.split('_').slice(1);
         selectedReciverId = employeeId;
         currentSn = sn;
@@ -292,6 +316,7 @@ bot.on('message', async (msg) => {
                 status: 'В ремонте',
                 sender_id: selectedSenderId,
                 sc_id: serviceCompanyID,
+                equipment_type_id: equipmentTypeID,
             });
 
             selectedSenderId = null;
