@@ -1,332 +1,256 @@
+require('dotenv').config();
+const fs = require('fs');
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
-const fs = require('fs');
-require('dotenv').config();
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 const PASSWORD = process.env.BOT_PASSWORD;
-let pswd = '';
-
 if (!PASSWORD) {
-    console.error('Ошибка: Пароль не задан в переменных окружения.');
-    process.exit(1);
+  console.error('ERROR: BOT_PASSWORD is not set');
+  process.exit(1);
 }
 
 const authorizedUsers = new Set();
-let selectedSenderId = null;
-let serviceCompanyID = null;
-let equipmentTypeID = null;
-let selectedReciverId = null;
-let currentSn = null;
-
-function cleanSN(str) {
-    return !/[ `!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~]/.test(str);
-  }
-
-// Функции для получения данных
-
-    const keyboard = {
-        keyboard: [
-            [{ text: '📤 /torepair' }],
-            [{ text: '📥 /fromrepair' }],
-            [{ text: '📋 /show' }],
-            [{ text: '📁 /file' }],
-        ],
-        resize_keyboard: true,
-        one_time_keyboard: true
-    };
-
-const getEmployees = async () => {
-    try {
-        const response = await axios.get('http://localhost:6000/api/employees');
-        return response.data;
-    } catch (err) {
-        console.error('Ошибка при получении списка сотрудников:', err);
-        return [];
-    }
+let state = {
+  senderId: null,
+  serviceCompanyId: null,
+  equipmentTypeId: null,
+  receiverId: null,
+  currentSn: null
 };
 
-const getSCName = async() => {
-    try {
-        const response = await axios.get('http://localhost:6000/api/service_company');
-        return response.data;
-    } catch (err) {
-        console.error('Ошибка при получении списка сервисных компаний:', err);
-        return [];
-    }
-};
-
-const getEquipmentTypeName = async () => {
-    try{
-        const response = await axios.get('http://localhost:6000/api/equipment_type');
-        return response.data;
-    } catch (err) {
-        console.error('Оштбка при получении списка типов устройств:', err);
-        return [];
-    }
+/** Простая утилита для генерации inline-клавиатур */
+function makeInlineKeyboard(items, prefix) {
+  return {
+    inline_keyboard: items.map(({ id, label }) => [{
+      text: label,
+      callback_data: `${prefix}_${id}${prefix === 'receiver' ? `_${state.currentSn}` : ''}`
+    }])
+  };
 }
 
-const getEquipmentToRepair = async () => {
+/** Унифицированная обработка ошибок API / логирование */
+async function handleError(chatId, err, context = '') {
+  console.error(`Error in ${context}:`, err);
+  const msg = err.response?.data?.message || err.response?.data?.error || 'Что-то пошло не так, повторите позже.';
+  await bot.sendMessage(chatId, `❌ ${msg}`);
+}
+
+// --- API layer ---
+const api = {
+  base: axios.create({ baseURL: 'http://localhost:6000/api' }),
+
+  getEmployees: () => api.base.get('/employees').then(r => r.data),
+  getServiceCompanies: () => api.base.get('/service_company').then(r => r.data),
+  getEquipmentTypes: () => api.base.get('/equipment_type').then(r => r.data),
+  getEquipment: (path) => api.base.get(`/equipment${path || ''}`).then(r => r.data),
+  createCsv: () => api.base.post('/equipment/createfile'),
+  sendToRepair: (payload) => api.base.post('/equipment', payload),
+  returnFromRepair: (sn, payload) => api.base.put(`/equipment/${sn}`, payload)
+};
+
+// --- Основная клавиатура ---
+const mainKeyboard = {
+  resize_keyboard: true,
+  one_time_keyboard: true,
+  keyboard: [
+    [{ text: '📤 /torepair' }],
+    [{ text: '📥 /fromrepair' }],
+    [{ text: '📋 /show' }],
+    [{ text: '📁 /file' }]
+  ]
+};
+
+// --- Хэндлеры команд ---
+bot.onText(/\/start/, msg => {
+  const chatId = msg.chat.id;
+  if (authorizedUsers.has(chatId)) {
+    return bot.sendMessage(chatId, 'Вы уже авторизованы.', { reply_markup: mainKeyboard });
+  }
+  bot.sendMessage(chatId, 'Введите пароль для доступа:');
+});
+
+bot.onText(/\/torepair/, async msg => {
+  const chatId = msg.chat.id;
+  if (!authorizedUsers.has(chatId)) return bot.sendMessage(chatId, 'Доступ запрещён. /start для входа.');
+  try {
+    const list = await api.getEmployees();
+    if (!list.length) return bot.sendMessage(chatId, 'Нет сотрудников в базе.');
+    const keyboard = makeInlineKeyboard(
+      list.map(e => ({ id: e.id, label: e.fio })),
+      'sender'
+    );
+    await bot.sendMessage(chatId, 'Кто отправляет в ремонт?', { reply_markup: keyboard });
+  } catch (e) {
+    await handleError(chatId, e, 'getEmployees');
+  }
+});
+
+bot.onText(/\/fromrepair/, async msg => {
+  const chatId = msg.chat.id;
+  if (!authorizedUsers.has(chatId)) return bot.sendMessage(chatId, 'Доступ запрещён. /start для входа.');
+  try {
+    const items = await api.getEquipment('/fromRepair');
+    await sendList(chatId, items, true);
+  } catch (e) {
+    await handleError(chatId, e, 'getEquipment/fromRepair');
+  }
+});
+
+bot.onText(/\/show/, async msg => {
+  const chatId = msg.chat.id;
+  if (!authorizedUsers.has(chatId)) return bot.sendMessage(chatId, 'Доступ запрещён. /start для входа.');
+  try {
+    const items = await api.getEquipment('/show');
+    await sendList(chatId, items);
+  } catch (e) {
+    await handleError(chatId, e, 'getEquipment/show');
+  }
+});
+
+bot.onText(/\/file/, async msg => {
+  const chatId = msg.chat.id;
+  if (!authorizedUsers.has(chatId)) return bot.sendMessage(chatId, 'Доступ запрещён. /start для входа.');
+  const path = './equipment_list.csv';
+  try {
+    await api.createCsv();
+    if (!fs.existsSync(path)) throw new Error('Файл не найден');
+    await bot.sendDocument(chatId, path);
+    fs.unlinkSync(path);
+  } catch (e) {
+    await handleError(chatId, e, 'createCsv or sendDocument');
+  }
+});
+
+/** Отправляет список оборудования в чат */
+async function sendList(chatId, equipment, isFromRepair = false) {
+  if (!equipment.length) return bot.sendMessage(chatId, 'Список пуст.');
+  for (const item of equipment) {
+    const txt = `
+*SN*: \`${item.sn}\`
+*Тип*: \`${item.equipment_type || '—'}\`
+*Статус*: \`${item.status}\`
+*Отправлен*: \`${item.send_date}\`
+*Получил*: \`${item.reciver_fio || '—'}\`
+`;
+    const opts = { parse_mode: 'MarkdownV2' };
+    if (isFromRepair) {
+      state.currentSn = item.sn;
+      Object.assign(opts, {
+        reply_markup: makeInlineKeyboard(
+          [{ id: item.sn, label: 'Принять из ремонта' }],
+          'return'
+        )
+      });
+    }
+    await bot.sendMessage(chatId, txt, opts);
+  }
+}
+
+// --- Обработчик callback_query ---
+bot.on('callback_query', async query => {
+  const chatId = query.message.chat.id;
+  const [action, id, sn] = query.data.split('_');
+
+  try {
+    switch (action) {
+      case 'sender':
+        state.senderId = id;
+        {
+          const list = await api.getServiceCompanies();
+          const keyboard = makeInlineKeyboard(
+            list.map(s => ({ id: s.id, label: s.sc_name })),
+            'sc'
+          );
+          await bot.sendMessage(chatId, 'Выберите сервисную компанию:', { reply_markup: keyboard });
+        }
+        break;
+
+      case 'sc':
+        state.serviceCompanyId = id;
+        {
+          const list = await api.getEquipmentTypes();
+          const keyboard = makeInlineKeyboard(
+            list.map(e => ({ id: e.id, label: e.equipment_name })),
+            'et'
+          );
+          await bot.sendMessage(chatId, 'Выберите тип оборудования:', { reply_markup: keyboard });
+        }
+        break;
+
+      case 'et':
+        state.equipmentTypeId = id;
+        await bot.sendMessage(chatId, 'Введите SN (без спецсимволов):');
+        break;
+
+      case 'return':
+        state.currentSn = id;
+        {
+          const list = await api.getEmployees();
+          const keyboard = makeInlineKeyboard(
+            list.map(e => ({ id: e.id, label: e.fio })),
+            'receiver'
+          );
+          await bot.sendMessage(chatId, 'Кто принимает из ремонта?', { reply_markup: keyboard });
+        }
+        break;
+
+      case 'receiver':
+        state.receiverId = id;
+        await api.returnFromRepair(sn, {
+          recive_date: new Date().toISOString().split('T')[0],
+          reciver_id: state.receiverId,
+          status: 'Вернулся из ремонта'
+        });
+        await bot.sendMessage(chatId, `✔ Оборудование ${sn} принято.`);
+        // Сброс состояния
+        state.receiverId = state.currentSn = null;
+        break;
+    }
+  } catch (e) {
+    await handleError(chatId, e, `callback_${action}`);
+  }
+});
+
+// --- Обработка обычных сообщений (пароль и SN) ---
+bot.on('message', async msg => {
+  const chatId = msg.chat.id;
+  const text = msg.text?.trim();
+  if (!text || text.startsWith('/')) return;
+
+  if (text === PASSWORD && !authorizedUsers.has(chatId)) {
+    authorizedUsers.add(chatId);
+    return bot.sendMessage(chatId, 'Доступ разрешён.', { reply_markup: mainKeyboard });
+  }
+
+  if (state.senderId) {
+    // Приём SN
+    if (text.length < 3 || /\s|[^\w-]/.test(text)) {
+      return bot.sendMessage(chatId, '❌ Некорректный SN. Минимум 3 символа, без пробелов и спецсимволов.');
+    }
     try {
-        const response = await axios.get('http://localhost:6000/api/equipment/fromRepair');
-        return response.data;
-    } catch (err) {
-        console.error('Ошибка при получении списка оборудования:', err);
-        return [];
+      await api.sendToRepair({
+        sn: text,
+        send_date: new Date().toISOString().split('T')[0],
+        status: 'В ремонте',
+        sender_id: state.senderId,
+        sc_id: state.serviceCompanyId,
+        equipment_type_id: state.equipmentTypeId
+      });
+      await bot.sendMessage(chatId, `✔ SN ${text} отправлен в ремонт.`);
+    } catch (e) {
+      const serverMsg =
+      e.response?.data?.message ||
+      e.response?.data?.error ||
+      e.response?.data?.detail ||
+      'Неизвестная ошибка';
+      await bot.sendMessage(chatId, `❌ ${serverMsg}`);
+    } finally {
+      state.senderId = null;
+      state.serviceCompanyId = null;
+      state.equipmentTypeId = null;
     }
-};
-
-const getEquipment = async () => {
-    try {
-        const response = await axios.get('http://localhost:6000/api/equipment/show');
-        return response.data;
-    } catch (err) {
-        console.error('Ошибка при получении списка оборудования:', err);
-        return [];
-    }
-};
-
-const createFile = async () => {
-    try {
-        await axios.post('http://localhost:6000/api/equipment/createfile');
-        return true;
-    } catch (err) {
-        console.error('Ошибка при формировании файла:', err);
-        return false;
-    }
-};
-
-// Функция для отправки списка оборудования
-const sendEquipmentList = async (chatId, equipment, isFromRepair = false) => {
-    if (equipment.length === 0) {
-        return bot.sendMessage(chatId, 'Список оборудования пуст.');
-    }
-
-    for (const item of equipment) {
-        const message = `
-*SN:* \`${item.sn}\`
-*Тип оборудования:* \`${item.equipment_type || 'Не указан'}\`
-*Дата отправки в ремонт:* \`${item.send_date}\`
-*Отправитель:* \`${item.sender_fio || 'Не указан'}\`
-*Дата приема из ремонта:* \`${item.recive_date || 'Не указан'}\`
-*Принимающий:* \`${item.reciver_fio || 'Не указан'}\`
-*Сервисная компания:* \`${item.service_company || 'Не указан'}\`
-*Статус:* \`${item.status}\`
-        `;
-
-        if (isFromRepair) {
-            const keyboard = {
-                inline_keyboard: [
-                    [{ text: 'Принять из ремонта', callback_data: `return_${item.sn}` }]
-                ]
-            };
-            bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2', reply_markup: keyboard });
-        } else {
-            bot.sendMessage(chatId, message, { parse_mode: 'MarkdownV2' });
-        }
-    }
-};
-
-// Обработчики команд
-bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-    if (authorizedUsers.has(chatId)) {
-        bot.sendMessage(chatId, 'Вы уже авторизованы');
-        bot.sendMessage(chatId, 'Выберите действие на встроенной клавиатуре', {
-            reply_markup: keyboard
-        });
-    } else{
-    bot.sendMessage(chatId, 'Введите пароль для доступа:');
-    }
-});
-
-
-bot.onText(/\/torepair/, async (msg) => {
-    const chatId = msg.chat.id;
-
-    if (!authorizedUsers.has(chatId)) {
-        return bot.sendMessage(chatId, 'Доступ запрещён. Введите пароль с помощью команды /start.');
-    }
-
-    const employees = await getEmployees();
-    
-
-    if (employees.length === 0) {
-        return bot.sendMessage(chatId, 'Список сотрудников пуст.');
-    }
-
-    const Employee_keyboard = employees.map(employee => [{ text: employee.fio, callback_data: `sender_${employee.id}` }]);
-
-
-
-    bot.sendMessage(chatId, 'Выберите сотрудника, который отправляет оборудование в ремонт:', {
-        reply_markup: {
-            inline_keyboard: Employee_keyboard,
-        },
-    });
-});
-
-bot.onText(/\/fromrepair/, async (msg) => {
-    const chatId = msg.chat.id;
-
-    if (!authorizedUsers.has(chatId)) {
-        return bot.sendMessage(chatId, 'Доступ запрещён. Введите пароль с помощью команды /start.');
-    }
-
-    const equipmentToRepair = await getEquipmentToRepair();
-    await sendEquipmentList(chatId, equipmentToRepair, true);
-});
-
-bot.onText(/\/show/, async (msg) => {
-    const chatId = msg.chat.id;
-
-    if (!authorizedUsers.has(chatId)) {
-        return bot.sendMessage(chatId, 'Доступ запрещён. Введите пароль с помощью команды /start.');
-    }
-
-    const equipment = await getEquipment();
-    await sendEquipmentList(chatId, equipment);
-});
-
-bot.onText(/\/file/, async (msg) => {
-    const chatId = msg.chat.id;
-
-    if (!authorizedUsers.has(chatId)) {
-        return bot.sendMessage(chatId, 'Доступ запрещён. Введите пароль с помощью команды /start.');
-    }
-
-    const filePath = './equipment_list.csv';
-
-    const fileCreated = await createFile();
-    if (!fileCreated) {
-        return bot.sendMessage(chatId, 'Ошибка при создании файла.');
-    }
-
-    if (!fs.existsSync(filePath)) {
-        return bot.sendMessage(chatId, 'Файл не найден.');
-    }
-
-    bot.sendDocument(chatId, filePath)
-        .then(() => {
-            console.log('Файл успешно отправлен.');
-            fs.unlinkSync(filePath);
-        })
-        .catch(err => {
-            console.error('Ошибка при отправке файла:', err);
-            bot.sendMessage(chatId, 'Ошибка при отправке файла.');
-        });
-});
-
-bot.on('callback_query', async (query) => {
-    const chatId = query.message.chat.id;
-    const data = query.data;
-
-    if (data.startsWith('sender_')) {
-        selectedSenderId = data.split('_')[1];
-        const servise_companys = await getSCName();
-        const SC_keyboad = servise_companys.map(service_company => [{text: service_company.sc_name, callback_data: `sc_${service_company.id}` }]);
-        bot.sendMessage(chatId, 'Выберите сервисную компанию, в которую отправляется оборудование:', {
-            reply_markup: {
-                inline_keyboard: SC_keyboad,
-            },
-        });
-
-        
-    } else if(data.startsWith('sc_')){
-        serviceCompanyID = data.split('_')[1];
-        const equipment_types = await getEquipmentTypeName();
-        const equipment_types_keyboard = equipment_types.map(equipment_type => [{text: equipment_type.equipment_name, callback_data: `et_${equipment_type.id}` }]);
-        bot.sendMessage(chatId, 'Выберите тип оборудования, которое отправляется в сервисную компанию:', {
-            reply_markup: {
-                inline_keyboard: equipment_types_keyboard,
-            },
-        });
-
-        
-    } else if(data.startsWith('et_')){
-        equipmentTypeID = data.split('_')[1];
-        bot.sendMessage(chatId, 'Введите серийный номер оборудования:');
-    }
-        else if (data.startsWith('receiver_')) {
-        const [employeeId, sn] = data.split('_').slice(1);
-        selectedReciverId = employeeId;
-        currentSn = sn;
-
-        try {
-            await axios.put(`http://localhost:6000/api/equipment/${currentSn}`, {
-                recive_date: new Date().toLocaleDateString(),
-                reciver_id: selectedReciverId,
-                status: 'Вернулся из ремонта',
-            });
-
-            bot.sendMessage(chatId, `Оборудование с SN ${currentSn} вернулось из ремонта.`);
-
-            selectedReciverId = null;
-            currentSn = null;
-        } catch (err) {
-            console.error('Ошибка при обновлении статуса:', err);
-            bot.sendMessage(chatId, 'Ошибка при обновлении статуса.');
-        }
-    } else if (data.startsWith('return_')) {
-        const sn = data.split('_')[1];
-
-        const employees = await getEmployees();
-
-        if (employees.length === 0) {
-            return bot.sendMessage(chatId, 'Список сотрудников пуст.');
-        }
-
-        const keyboard = employees.map(employee => [{ text: employee.fio, callback_data: `receiver_${employee.id}_${sn}` }]);
-
-        bot.sendMessage(chatId, 'Выберите сотрудника, который принимает оборудование:', {
-            reply_markup: {
-                inline_keyboard: keyboard,
-            },
-        });
-    }
-});
-
-bot.on('message', async (msg) => {
-    const chatId = msg.chat.id;
-    const text = msg.text;
-    if (text.startsWith('/')) {
-        return;
-    }
-
-    if (text === PASSWORD) {
-        pswd = text;
-        authorizedUsers.add(chatId);
-        bot.sendMessage(chatId, 'Пароль верный. Доступ разрешён.');
-        bot.sendMessage(chatId, 'Выберите действие на встроенной клавиатуре', {
-            reply_markup: keyboard
-        });
-    } else if (selectedSenderId !== null) {
-        const sn = text.trim();
-        
-        if (!sn || sn.length < 3 || !cleanSN(sn)) {
-            return bot.sendMessage(chatId, '❌ Ошибка: SN не может быть пустым, содержать пробелы и спецсимволы или слишком коротким!');
-        }
-
-        const send_date = new Date().toLocaleDateString();
-
-        try {
-            const response = await axios.post('http://localhost:6000/api/equipment', {
-                sn,
-                send_date,
-                status: 'В ремонте',
-                sender_id: selectedSenderId,
-                sc_id: serviceCompanyID,
-                equipment_type_id: equipmentTypeID,
-            });
-
-            selectedSenderId = null;
-
-            bot.sendMessage(chatId, `Оборудование с SN ${sn} отправлено в ремонт ${send_date}.`);
-        } catch (err) {
-            console.error('Ошибка при добавлении оборудования:', err);
-            bot.sendMessage(chatId, 'Ошибка при добавлении оборудования.');
-        }
-    } else if(pswd !== PASSWORD){
-        bot.sendMessage(chatId, 'Неверный пароль. Доступ запрещён.');
-    }
+  } else if (!authorizedUsers.has(chatId)) {
+    bot.sendMessage(chatId, 'Неверный пароль. Доступ запрещён.');
+  }
 });
