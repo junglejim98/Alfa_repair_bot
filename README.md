@@ -87,25 +87,31 @@
 ```js
 app.post('/api/equipment', async (req, res) => {
   const { sn, send_date, status, sender_id, sc_id, equipment_type_id } = req.body;
-  // Проверка обязательных полей
   if (!sn || !send_date || !status || !sender_id || !sc_id || !equipment_type_id) {
     return res.status(400).json({ message: 'Не все поля переданы' });
   }
-  // Проверка дубликата в статусе "В ремонте"
-  const exists = await client.query(
-    `SELECT 1 FROM equipment WHERE sn = $1 AND status = 'В ремонте' LIMIT 1`,
-    [sn]
-  );
-  if (exists.rowCount) {
-    return res.status(409).json({ message: `Оборудование с SN ${sn} уже отправлено в ремонт` });
+  try {
+    const check = await client.query(`SELECT sn = $1 FROM equipment WHERE status = 'В ремонте' LIMIT 1`, [sn]);
+    if(check.rowCount){
+        return res
+        .status(409)
+        .json({ message: `Оборудование с SN ${sn} уже отправлено в ремонт` });
+    }
+    const { rows } = await client.query(
+      `INSERT INTO equipment
+        (sn, send_date, status, sender_id, sc_id, equip_type_id)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       RETURNING *`,
+      [sn, send_date, status, sender_id, sc_id, equipment_type_id]
+    );
+    res.status(201).json(rows[0]);
+  } catch (e) {
+    console.error('insert equipment:', e);
+    if (e.code === '23505') {
+      return res.status(409).json({ message: 'SN уже существует' });
+    }
+    res.status(500).json({ message: 'Ошибка при добавлении' });
   }
-  // Вставка записи
-  const { rows } = await client.query(
-    `INSERT INTO equipment (sn, send_date, status, sender_id, sc_id, equip_type_id)
-     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-    [sn, send_date, status, sender_id, sc_id, equipment_type_id]
-  );
-  res.status(201).json(rows[0]);
 });
 ```
 
