@@ -132,6 +132,7 @@ async function sendList(chatId, equipment, isFromRepair = false) {
 *Статус*: \`${item.status}\`
 *Отправлен*: \`${item.send_date}\`
 *Получил*: \`${item.reciver_fio || '—'}\`
+*СК*: \`${item.service_company || '—'}\`
 `;
     const opts = { parse_mode: 'MarkdownV2' };
     if (isFromRepair) {
