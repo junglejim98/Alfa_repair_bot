@@ -74,7 +74,7 @@ app.post('/api/equipment', async (req, res) => {
     return res.status(400).json({ message: 'Не все поля переданы' });
   }
   try {
-    const check = await client.query(`SELECT sn = $1 FROM equipment WHERE status = 'В ремонте' LIMIT 1`, [sn]);
+    const check = await client.query(`SELECT sn FROM equipment WHERE status = 'В ремонте' and sn = $1 LIMIT 1`, [sn]);
     if(check.rowCount){
         return res
         .status(409)
